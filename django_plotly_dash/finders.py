@@ -33,10 +33,9 @@ from django.contrib.staticfiles.utils import get_files
 from django.core.files.storage import FileSystemStorage
 
 from django.conf import settings
-from django.apps import apps
+from django.apps import apps #pylint: disable=unused-import
 
 from django_plotly_dash.dash_wrapper import all_apps
-from django_plotly_dash.util import full_asset_path
 
 class DashComponentFinder(BaseFinder):
     'Find static files in components'
@@ -44,11 +43,11 @@ class DashComponentFinder(BaseFinder):
     #pylint: disable=abstract-method, redefined-builtin
 
     def __init__(self):
-
+        
         self.locations = []
         self.storages = OrderedDict()
         self.components = {}
-
+        
         self.ignore_patterns = ["*.py", "*.pyc",]
 
         try:
@@ -105,44 +104,8 @@ class DashComponentFinder(BaseFinder):
         for component_name in self.locations:
             storage = self.storages[component_name]
             for path in get_files(storage, ignore_patterns + self.ignore_patterns):
+                print("DashAssetFinder", path, storage)
                 yield path, storage
-
-class DashAppDirectoryFinder(BaseFinder):
-    'Find static fies in application subdirectories'
-
-    def __init__(self):
-        # get all registered apps
-
-        self.locations = []
-        self.storages = OrderedDict()
-
-        self.ignore_patterns = ["*.py", "*.pyc",]
-
-        for app_config in apps.get_app_configs():
-
-            path_directory = os.path.join(app_config.path, 'assets')
-
-            if os.path.isdir(path_directory):
-
-                storage = FileSystemStorage(location=path_directory)
-
-                storage.prefix = full_asset_path(app_config.name, "")
-
-                self.locations.append(app_config.name)
-                self.storages[app_config.name] = storage
-
-        super(DashAppDirectoryFinder, self).__init__()
-
-    #pylint: disable=redefined-builtin
-    def find(self, path, all=False):
-        return []
-
-    def list(self, ignore_patterns):
-        for component_name in self.locations:
-            storage = self.storages[component_name]
-            for path in get_files(storage, ignore_patterns + self.ignore_patterns):
-                yield path, storage
-
 
 class DashAssetFinder(BaseFinder):
     'Find static files in asset directories'
@@ -150,35 +113,27 @@ class DashAssetFinder(BaseFinder):
     #pylint: disable=unused-import, unused-variable, no-name-in-module, import-error, abstract-method
 
     def __init__(self):
-
-        # Ensure urls are loaded
-        root_urls = settings.ROOT_URLCONF
-        importlib.import_module(root_urls)
-
-        # Get all registered django dash apps
+        # Get all registered apps
 
         self.apps = all_apps()
+
+        self.subdir = 'assets'
 
         self.locations = []
         self.storages = OrderedDict()
 
         self.ignore_patterns = ["*.py", "*.pyc",]
 
-        added_locations = {}
-
         for app_slug, obj in self.apps.items():
-
             caller_module = obj.caller_module
             location = obj.caller_module_location
-            subdir = obj.assets_folder
-
-            path_directory = os.path.join(os.path.dirname(location), subdir)
+            path_directory = os.path.join(os.path.dirname(location), self.subdir)
 
             if os.path.isdir(path_directory):
 
                 component_name = app_slug
                 storage = FileSystemStorage(location=path_directory)
-                path = full_asset_path(obj.caller_module.__name__,"")
+                path = "dash/assets/%s" % component_name
                 storage.prefix = path
 
                 self.locations.append(component_name)
@@ -195,4 +150,3 @@ class DashAssetFinder(BaseFinder):
             storage = self.storages[component_name]
             for path in get_files(storage, ignore_patterns + self.ignore_patterns):
                 yield path, storage
-

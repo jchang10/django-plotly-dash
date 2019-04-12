@@ -39,8 +39,6 @@ from plotly.utils import PlotlyJSONEncoder
 from .app_name import app_name, main_view_label
 from .middleware import EmbeddedHolder
 
-from .util import static_asset_path
-from .util import serve_locally as serve_locally_setting
 
 uid_counter = 0
 
@@ -86,12 +84,11 @@ class DjangoDash:
     To use, construct an instance of DjangoDash() in place of a Dash() one.
     '''
     #pylint: disable=too-many-instance-attributes
-    def __init__(self, name=None, serve_locally=None,
+    def __init__(self, name=None, serve_locally=False,
                  expanded_callbacks=False,
                  add_bootstrap_links=False,
                  suppress_callback_exceptions=False,
                  **kwargs): # pylint: disable=unused-argument, too-many-arguments
-
         if name is None:
             global uid_counter # pylint: disable=global-statement
             uid_counter += 1
@@ -107,40 +104,19 @@ class DjangoDash:
         add_usable_app(self._uid,
                        self)
 
-        if serve_locally is None:
-            self._serve_locally = serve_locally_setting()
-        else:
-            self._serve_locally = serve_locally
-
         self._expanded_callbacks = expanded_callbacks
+        self._serve_locally = serve_locally
         self._suppress_callback_exceptions = suppress_callback_exceptions
 
         if add_bootstrap_links:
             from bootstrap4.bootstrap import css_url
             bootstrap_source = css_url()['href']
-
-            if self._serve_locally:
-                # Ensure package is loaded; if not present then pip install dpd-static-support
-                import dpd_static_support
-                hard_coded_package_name = "dpd_static_support"
-                base_file_name = bootstrap_source.split('/')[-1]
-
-                self.css.append_script({'external_url':        [bootstrap_source,],
-                                        'relative_package_path' : base_file_name,
-                                        'namespace':              hard_coded_package_name,
-                                        })
-            else:
-                self.css.append_script({'external_url':[bootstrap_source,],})
+            self.css.append_script({'external_url':[bootstrap_source,]})
 
         # Remember some caller info for static files
         caller_frame = inspect.stack()[1]
         self.caller_module = inspect.getmodule(caller_frame[0])
         self.caller_module_location = inspect.getfile(self.caller_module)
-        self.assets_folder = "assets"
-
-    def get_asset_static_url(self, asset_path):
-        module_name = self.caller_module.__name__
-        return static_asset_path(module_name, asset_path)
 
     def as_dash_instance(self, cache_id=None):
         '''
@@ -229,16 +205,6 @@ class DjangoDash:
         self._expanded_callbacks = True
         return self.callback(output, inputs, state, events)
 
-    def get_asset_url(self, asset_name):
-        '''URL of an asset associated with this component
-
-        Use a placeholder and insert later
-        '''
-
-        return "assets/" + str(asset_name)
-
-        #return self.as_dash_instance().get_asset_url(asset_name)
-
 class PseudoFlask:
     'Dummy implementation of a Flask instance, providing stub functionality'
     def __init__(self):
@@ -268,8 +234,7 @@ class WrappedDash(Dash):
     # pylint: disable=too-many-arguments, too-many-instance-attributes
     def __init__(self,
                  base_pathname=None, replacements=None, ndid=None,
-                 expanded_callbacks=False, serve_locally=False,
-                 **kwargs):
+                 expanded_callbacks=False, serve_locally=False, **kwargs):
 
         self._uid = ndid
 
@@ -280,8 +245,7 @@ class WrappedDash(Dash):
         kwargs['url_base_pathname'] = self._base_pathname
         kwargs['server'] = self._notflask
 
-        super(WrappedDash, self).__init__(__name__,
-                                          **kwargs)
+        super(WrappedDash, self).__init__(**kwargs)
 
         self.css.config.serve_locally = serve_locally
         self.scripts.config.serve_locally = serve_locally
@@ -437,9 +401,15 @@ class WrappedDash(Dash):
 
     def callback(self, output, inputs=[], state=[], events=[]): # pylint: disable=dangerous-default-value
         'Invoke callback, adjusting variable names as needed'
-        return super(WrappedDash, self).callback(self._fix_callback_item(output),
+        #MULTIFIX
+        #if isinstance(output, (list, tuple)):
+        #    rvoutput = [self._fix_callback_item(x) for x in output]
+        #else:
+        #    rvoutput = [self._fix_callback_item(output)]
+        rv = super(WrappedDash, self).callback(output,
                                                  [self._fix_callback_item(x) for x in inputs],
                                                  [self._fix_callback_item(x) for x in state])
+        return rv
 
     def dispatch(self):
         'Perform dispatch, using request embedded within flask global state'
@@ -454,12 +424,14 @@ class WrappedDash(Dash):
         state = body.get('state', [])
         output = body['output']
 
-        target_id = '{}.{}'.format(output['id'], output['property'])
+        #MULTIFIX
+        #target_id = '{}.{}'.format(output['id'], output['property'])
         args = []
 
         da = argMap.get('dash_app', None)
 
-        for component_registration in self.callback_map[target_id]['inputs']:
+        #MULTIFIX
+        for component_registration in self.callback_map[output]['inputs']:
             for c in inputs:
                 if c['property'] == component_registration['property'] and c['id'] == component_registration['id']:
                     v = c.get('value', None)
@@ -467,7 +439,8 @@ class WrappedDash(Dash):
                     if da:
                         da.update_current_state(c['id'], c['property'], v)
 
-        for component_registration in self.callback_map[target_id]['state']:
+        #MULTIFIX
+        for component_registration in self.callback_map[output]['state']:
             for c in state:
                 if c['property'] == component_registration['property'] and c['id'] == component_registration['id']:
                     v = c.get('value', None)
@@ -479,16 +452,25 @@ class WrappedDash(Dash):
         # This happens when a propery has been updated with a pipe component
         # TODO see if this can be attacked from the client end
 
-        if len(args) < len(self.callback_map[target_id]['inputs']):
+        #MULTIFIX
+        if len(args) < len(self.callback_map[output]['inputs']):
             return 'EDGECASEEXIT'
 
-        res = self.callback_map[target_id]['callback'](*args, **argMap)
-        if da and da.have_current_state_entry(output['id'], output['property']):
-            response = json.loads(res.data.decode('utf-8'))
-            value = response.get('response', {}).get('props', {}).get(output['property'], None)
-            da.update_current_state(output['id'], output['property'], value)
+        #MULTIFIX
+        #res = self.callback_map[target_id]['callback'](*args, **argMap)
+        res = self.callback_map[output]['callback'](*args, **argMap)
+        #MULTIFIX this is broken but ignoring for now. da seems to be None anyway.
+        if False and THIS_IS_BROKEN:
+            if da and da.have_current_state_entry(output['id'], output['property']):
+                response = json.loads(res.data.decode('utf-8'))
+                value = response.get('response', {}).get('props', {}).get(output['property'], None)
+                da.update_current_state(output['id'], output['property'], value)
 
-        return res
+        import flask
+        response = flask.Response(
+            mimetype='application/json')
+        response.set_data(res)
+        return response
 
     def slugified_id(self):
         'Return the app id in a slug-friendly form'
@@ -514,7 +496,7 @@ class WrappedDash(Dash):
                                                                                                          'template_type':template_type,
                                                                                                          'prefix':prefix,
                                                                                                         }
-
+    """
     def index(self, *args, **kwargs):  # pylint: disable=unused-argument
         scripts = self._generate_scripts_html()
         css = self._generate_css_dist_html()
@@ -541,9 +523,8 @@ class WrappedDash(Dash):
 
         return index
 
-    def interpolate_index(self, **kwargs): #pylint: disable=arguments-differ
 
-        print("IN INTERPOLATE INDEX")
+    def interpolate_index(self, **kwargs): #pylint: disable=arguments-differ
 
         if not self._return_embedded:
             resp = super(WrappedDash, self).interpolate_index(**kwargs)
@@ -554,7 +535,7 @@ class WrappedDash(Dash):
         self._return_embedded.add_scripts(kwargs['scripts'])
 
         return kwargs['app_entry']
-
+    """
     def set_embedded(self, embedded_holder=None):
         'Set a handler for embedded references prior to evaluating a view function'
         self._return_embedded = embedded_holder if embedded_holder else EmbeddedHolder()
